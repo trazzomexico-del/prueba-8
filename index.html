@@ -31,6 +31,7 @@
     <div id="preloadContainer" class="fill-viewport"><div style="z-index: 4; position: absolute; overflow: hidden; left: 0%; top: 50%; width: 100.00%; height: 10.00%" ><div style="text-align:left; color:#000; "><DIV STYLE="text-align:center;font-size:1.6666666666666663vmin;"><SPAN STYLE="display:inline-block; letter-spacing:0vmin; white-space:pre-wrap;color:#777777;font-size:1.67vmin;font-family:Arial, Helvetica, sans-serif;">Loading virtual tour. Please wait...</SPAN></DIV></div></div></div>
     <div id="viewer" class="fill-viewport"></div>
 <script>
+// Enlace de exportación CSV directo y seguro
 const URL_GOOGLE_SHEETS = "https://docs.google.com/spreadsheets/d/1Iffh-VbZUFFYpI5sVI8HQAz6IPgACs_W2sq0iEH4iVo/export?format=csv";
 
 function inicializarControlInventario() {
@@ -51,64 +52,78 @@ function inicializarControlInventario() {
             }
         });
 
+        // ========================================================
+        // 1. INTERCEPTAR EL OBJETO MAESTRO DE 3DVISTA (tdvData)
+        // ========================================================
+        if (window.tdvData && window.tdvData.panoramas) {
+            window.tdvData.panoramas.forEach(pano => {
+                if (pano.hotspots) {
+                    pano.hotspots.forEach(hotspot => {
+                        let nombre = (hotspot.name || "").toLowerCase().replace(/[\s_-]/g, "");
+                        if (mapeo_lotes[nombre]) {
+                            let estado = mapeo_lotes[nombre];
+                            let color = (estado.includes("vend") || estado.includes("roj")) ? "#FF0000" : "#00FF00";
+                            // Inyección directa en propiedades nativas de 3DVista
+                            hotspot.fillColor = color;
+                            hotspot.lineColor = color;
+                            hotspot.fillOpacity = 0.6;
+                        }
+                    });
+                }
+            });
+        }
+
+        // ========================================================
+        // 2. OBLIGAR AL REPRODUCTOR EN VIVO A RE-RENDERIZAR
+        // ========================================================
         let intentos = 0;
-        let verificadorHotspots = setInterval(() => {
+        let verificadorVivo = setInterval(() => {
             intentos++;
             
-            // Forzamos la búsqueda tanto en el objeto global "pano" como en la librería "tdvplayer"
-            let tdvPlayerInstance = window.tdvplayer || (window.pano ? window.pano.getViewer() : null);
-            let player = window.pano || tdvPlayerInstance;
-
-            if (player && typeof player.getPanoramas === "function") {
-                let panos = player.getPanoramas();
-                
+            if (window.pano && typeof window.pano.getPanoramas === "function") {
+                let panos = window.pano.getPanoramas();
                 if (panos && panos.length > 0) {
-                    let seAplicaronCambios = false;
+                    let seModificoPanoActual = false;
 
                     panos.forEach(p => {
-                        if (typeof p.getHotspots === "function") {
-                            let hotspots = p.getHotspots();
-                            
-                            if (hotspots && hotspots.length > 0) {
-                                hotspots.forEach(hotspot => {
-                                    let nombreHotspot = hotspot.get("name") || hotspot.id || "";
+                        let hotspots = typeof p.getHotspots === "function" ? p.getHotspots() : (p.hotspots || []);
+                        if (hotspots && hotspots.length > 0) {
+                            hotspots.forEach(hotspot => {
+                                let nombre = hotspot.name || (hotspot.get ? hotspot.get("name") : "") || hotspot.id || "";
+                                let nombreLimpio = nombre.toString().toLowerCase().replace(/[\s_-]/g, "");
+                                
+                                if (mapeo_lotes[nombreLimpio]) {
+                                    let estado = mapeo_lotes[nombreLimpio];
+                                    let color = (estado.includes("vend") || estado.includes("roj")) ? "#FF0000" : "#00FF00";
                                     
-                                    if (nombreHotspot) {
-                                        let nombreHotspotLimpio = nombreHotspot.toString().toLowerCase().replace(/[\s_-]/g, "");
-                                        
-                                        // Si coincide con alguna clave de tu Excel (ej: "lote01")
-                                        if (mapeo_lotes[nombreHotspotLimpio]) {
-                                            let estado = mapeo_lotes[nombreHotspotLimpio];
-                                            
-                                            if (estado.includes("vend") || estado.includes("roj")) {
-                                                hotspot.set("fillColor", "#FF0000"); // Rojo
-                                                hotspot.set("lineColor", "#FF0000");
-                                                hotspot.set("fillOpacity", 0.6);
-                                            } 
-                                            else if (estado.includes("disp") || estado.includes("verd")) {
-                                                hotspot.set("fillColor", "#00FF00"); // Verde
-                                                hotspot.set("lineColor", "#00FF00");
-                                                hotspot.set("fillOpacity", 0.6);
-                                            }
-                                            
-                                            if (typeof hotspot.update === "function") hotspot.update();
-                                            seAplicaronCambios = true;
-                                        }
-                                    }
-                                });
-                            }
+                                    // Forzamos propiedades en caliente
+                                    hotspot.fillColor = color;
+                                    hotspot.lineColor = color;
+                                    hotspot.fillOpacity = 0.6;
+                                    if (hotspot.set) hotspot.set("fillColor", color);
+                                    
+                                    seModificoPanoActual = true;
+                                }
+                            });
                         }
                     });
 
-                    // Si ya aplicó los cambios o pasó mucho tiempo, detenemos el ciclo
-                    if (seAplicaronCambios || intentos > 30) {
-                        clearInterval(verificadorHotspots);
+                    // Si alteró el panorama actual, forzamos refresco visual instantáneo del visor
+                    if (seModificoPanoActual && typeof window.pano.getCurrentPanoramaName === "function" && typeof window.pano.setPanorama === "function") {
+                        let escenaActual = window.pano.getCurrentPanoramaName();
+                        window.pano.setPanorama(escenaActual);
+                        clearInterval(verificadorVivo); // Detener ciclo para evitar parpadeos
                     }
                 }
             }
-        }, 500);
+
+            if (intentos > 30) {
+                clearInterval(verificadorVivo);
+            }
+        }, 300);
+
     })
-    .catch(error => console.error('Error de inventario:', error));
+    .catch(error => console.error('Error en enlace Sheets:', error));
 }
 
 if (document.readyState === "complete" || document.readyState === "interactive") {
